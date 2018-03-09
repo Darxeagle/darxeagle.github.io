@@ -2,7 +2,7 @@
 
 // For Photon Cloud Application access create cloud-app-info.js file in the root directory (next to default.html) and place next lines in it:
 //var AppInfo = {
-//    MasterAddress: "master server address:port",
+//    StartAddress: "start server address:port",
 //    AppId: "your app id",
 //    AppVersion: "your app version",
 //}
@@ -11,258 +11,219 @@
 var DemoWss = this["AppInfo"] && this["AppInfo"]["Wss"];
 var DemoAppId = this["AppInfo"] && this["AppInfo"]["AppId"] ? this["AppInfo"]["AppId"] : "<no-app-id>";
 var DemoAppVersion = this["AppInfo"] && this["AppInfo"]["AppVersion"] ? this["AppInfo"]["AppVersion"] : "1.0";
-var DemoMasterServer = this["AppInfo"] && this["AppInfo"]["MasterServer"];
-var DemoFbAppId = this["AppInfo"] && this["AppInfo"]["FbAppId"];
 
-var ConnectOnStart = false;
+var UserCount = 10;
+var DemoConstants =
+    {
+        ChannelsToSubscribe: ["a", "b", "c"],
+        ChannelsToUnsubscribe: ["a", "b", "c", "z"],
+        InitialUserId: "user" + Math.floor(UserCount * Math.random()),
+        FriendList: function () {
+            var res = [];
+            for (var i = 0; i < UserCount; i++)
+                res.push("user" + i)
+        return res;
+        }(),
+        LogLevel: Exitgames.Common.Logger.Level.INFO,
+    }
 
-class DemoLoadBalancing extends Photon.LoadBalancing.LoadBalancingClient {
-    logger = new Exitgames.Common.Logger("Demo:");
+class ChatDemo extends Photon.Chat.ChatClient {
 
-    private USERCOLORS = ["#FF0000", "#00AA00", "#0000FF", "#FFFF00", "#00FFFF", "#FF00FF"];
-
-    constructor() {
+    constructor(private canvas: HTMLCanvasElement) {
         super(DemoWss ? Photon.ConnectionProtocol.Wss : Photon.ConnectionProtocol.Ws, DemoAppId, DemoAppVersion);
 
         // uncomment to use Custom Authentication
         // this.setCustomAuthentication("username=" + "yes" + "&token=" + "yes");
 
-        this.output(this.logger.format("Init", this.getNameServerAddress(), DemoAppId, DemoAppVersion));
+        Output.log("[i]", "Init", this.getNameServerAddress(), DemoAppId, DemoAppVersion);
         this.logger.info("Init", this.getNameServerAddress(), DemoAppId, DemoAppVersion);
-        this.setLogLevel(Exitgames.Common.Logger.Level.INFO);
-
-        this.myActor().setCustomProperty( "color", this.USERCOLORS[0]);
-    }
-    start() {
-        this.setupUI();
-        // connect if no fb auth required 
-        if (ConnectOnStart) {
-            if (DemoMasterServer) {
-                this.setMasterServerAddress(DemoMasterServer);
-                this.connect();
-            }
-            else {
-                this.connectToRegionMaster("EU");
-            }
-        }
-    }
-    onError(errorCode: number, errorMsg: string) {
-        this.output("Error " + errorCode + ": " + errorMsg);
-    }
-    onEvent(code: number, content: any, actorNr: number) {
-        switch(code) {
-            case 1:
-                var mess = content.message;
-                var sender = content.senderName;
-                if (actorNr)
-                    this.output(sender + ": " + mess, this.myRoomActors()[actorNr].getCustomProperty("color"));
-                else
-                    this.output(sender + ": " + mess);
-                break;
-            default:
-            }
-        this.logger.debug("onEvent", code, "content:", content, "actor:", actorNr);
+        this.setLogLevel(DemoConstants.LogLevel);
     }
 
-    onStateChange(state: number) {
-        // "namespace" import for static members shorter acceess
-        var LBC = Photon.LoadBalancing.LoadBalancingClient;
+    logger = new Exitgames.Common.Logger("Demo:", DemoConstants.LogLevel);
 
+    // overrides
+
+    onError(errorCode, errorMsg) {
+    	if (errorCode == Photon.Chat.ChatClient.ChatPeerErrorCode.FrontEndAuthenticationFailed) {
+            errorMsg = errorMsg + " with appId = " + DemoAppId;
+    	}
+        this.logger.error(errorCode, errorMsg);
+        Output.log("[i]", "Error", errorCode, errorMsg);
+    }
+
+    onStateChange(state) {
+        this.logger.info("State: ", state);
         var stateText = document.getElementById("statetxt");
-        stateText.textContent = LBC.StateToName(state);
-        this.updateRoomButtons();
-        this.updateRoomInfo();
-    }
-    objToStr(x: {}) {
-        var res = "";
-        for (var i in x) {
-            res += (res == "" ? "" : " ,") + i + "=" + x[i];
-        }
-        return res;
-    }
-    updateRoomInfo() {
-        var stateText = document.getElementById("roominfo");
-        stateText.innerHTML = "room: " + this.myRoom().name + " [" + this.objToStr(this.myRoom()._customProperties) + "]";
-        stateText.innerHTML = stateText.innerHTML + "<br>";
-        stateText.innerHTML += " actors: ";        
-        stateText.innerHTML = stateText.innerHTML + "<br>";
-        for (var nr in this.myRoomActors()) {
-            var a = this.myRoomActors()[nr];
-            stateText.innerHTML += " " + nr + " " + a.name + " [" + this.objToStr(a.customProperties) + "]";
-            stateText.innerHTML = stateText.innerHTML + "<br>";
-        }
-        this.updateRoomButtons();
+        stateText.textContent = Photon.Chat.ChatClient.StateToName(state);
+
+        var ChatClientState = Photon.Chat.ChatClient.ChatState;
+        if (state == ChatClientState.ConnectedToFrontEnd) {
+            Output.log("[i]", "---- connected to Front End\n",
+                "[Subscribe] for public channels or type in 'userid@message' and press 'Send' for private");
+	    }
+        var disconnected = state == ChatClientState.Uninitialized || state == ChatClientState.Disconnected;
+        if (disconnected) {
+            Output.log("[i]", "type in user id and press [Connect]");
+	    }
     }
 
-    onActorPropertiesChange(actor: Photon.LoadBalancing.Actor) { 
-        this.updateRoomInfo();
+	onChatMessages(channelName, messages)  {
+        for (var i in messages) {
+            var m = messages[i];
+            var sender = m.getSender();
+			if (sender == this.getUserId()) {
+                sender = "me";
+			}
+            Output.log('[' + channelName + ':' + sender + ']', m.getContent());
+		}
+	}
+	
+	onPrivateMessage(channelName, m) {
+        var sender = m.getSender();
+		if (sender == this.getUserId()) {
+			sender = "me";
+		}
+		Output.log('[' + channelName + '@' + sender + ']', m.getContent());
+	}
+	
+	onUserStatusUpdate(userId, status, gotMessage, statusMessage) {
+        var msg = statusMessage;
+		if (!gotMessage) {
+            msg = "[message skipped]";
+		}
+        Output.log("[i]", userId + ": " + Photon.Chat.Constants.UserStatusToName(status) + "(" + status + ") / " + msg);
+	}
+
+	onSubscribeResult(results) {
+        this.logger.info("onSubscribeResult", results);
+        var m = "---- subscribed to ";
+		for (var ch in results) {
+            this.logger.info("    ", ch, results[ch]);
+            if (results[ch]) {
+                m = m + "'" + ch + "', ";
+			}
+		}
+        Output.log("[i]", m, "\ntype in 'channel:message' and press 'Send' to publish" );
+	}
+
+	onUnsubscribeResult(results) {
+        this.logger.info("onUnsubscribeResult", results);
+		var m = "unsubscribed from ";
+        for (var ch in results) {
+            this.logger.info("    ", ch, results[ch]);
+            m = m + "'" + ch + "', ";
+		}
+        Output.log("[i]", m);
+	}
+
+	onOperationResponse(errorCode, errorMsg, code, content) {
+		if (errorCode != 0) {
+			Output.log('[i]', "error: " + errorMsg + '(op ' + code + ')')
+		}
+	} 
+
+
+    demoConnect() {
+        var userid = (<HTMLInputElement>document.getElementById("userid")).value;
+        this.setUserId(userid);
+        this.connectToRegionFrontEnd('EU');
     }
 
-    onMyRoomPropertiesChange() {
-        this.updateRoomInfo();
-    }
-
-    onRoomListUpdate(rooms: Photon.LoadBalancing.Room[], roomsUpdated: Photon.LoadBalancing.Room[], roomsAdded: Photon.LoadBalancing.Room[], roomsRemoved: Photon.LoadBalancing.Room[]) {
-        this.logger.info("Demo: onRoomListUpdate", rooms, roomsUpdated, roomsAdded, roomsRemoved);
-        this.output("Demo: Rooms update: " + roomsUpdated.length + " updated, " + roomsAdded.length + " added, " + roomsRemoved.length + " removed");
-        this.onRoomList(rooms);
-        this.updateRoomButtons(); // join btn state can be changed
-    }
-
-    onRoomList(rooms: Photon.LoadBalancing.Room[]) {
-        var menu = document.getElementById("gamelist");
-        while (menu.firstChild) {
-            menu.removeChild(menu.firstChild);
-        }
-        var selectedIndex = 0;
-        for (var i = 0; i < rooms.length;++i) {
-            var r = rooms[i];
-            var item = document.createElement("option");
-            item.attributes["value"] = r.name;
-            item.textContent = r.name;
-            menu.appendChild(item);
-            if (this.myRoom().name == r.name) {
-                selectedIndex = i;
+    demoSubscribe() {
+        if (chatClient.subscribe(DemoConstants.ChannelsToSubscribe)) {
+            Output.log("[i]", "subscribing...")
+            if (this.addFriends(DemoConstants.FriendList)) {
+                Output.log("[i]", "adding friends:" + DemoConstants.FriendList.join(","))
             }
         }
-        (<HTMLSelectElement>menu).selectedIndex = selectedIndex;
-        this.output("Demo: Rooms total: " + rooms.length);
-        this.updateRoomButtons(); 
-    }
-    onJoinRoom() {
-        this.output("Game " + this.myRoom().name + " joined");
-        this.updateRoomInfo()
-    }
-    onActorJoin(actor: Photon.LoadBalancing.Actor) {
-        this.output("actor " + actor.actorNr + " joined");
-        this.updateRoomInfo()
-    }
-    onActorLeave(actor: Photon.LoadBalancing.Actor) {
-        this.output("actor " + actor.actorNr + " left");
-        this.updateRoomInfo()
-    }
-    sendMessage(message: string) {
-        try {
-            this.raiseEvent(1, { message: message, senderName: "user" + this.myActor().actorNr });
-            this.output('me[' + this.myActor().actorNr + ']: ' + message, this.myActor().getCustomProperty("color"));
-        }
-        catch (err) {
-            this.output("error: " + err.message);
+        else {
+            Output.log("[i]", "error: subscribe send failed. [Connect] first?");
         }
     }
 
-    setupUI() {
-        this.logger.info("Setting up UI.");
-
+    demoUnsubscribe() {
+        if (chatClient.unsubscribe(DemoConstants.ChannelsToUnsubscribe)) {
+            Output.log("[i]", "unsubscribing...");
+            if (this.removeFriends(DemoConstants.FriendList)) {
+                Output.log("[i]", "clearing friends:" + DemoConstants.FriendList.join(","))
+            }
+        }
+    }
+    demoSendMessage() {
         var input = <HTMLInputElement>document.getElementById("input");
-        input.value = 'hello';
-        input.focus();
-
-        var btnJoin = <HTMLButtonElement>document.getElementById("joingamebtn");
-        btnJoin.onclick = (ev) => {
-            if (this.isInLobby()) {
-                var menu = <HTMLSelectElement>document.getElementById("gamelist");
-                var gameId = menu.children[menu.selectedIndex].textContent;
-                this.output(gameId);
-                this.joinRoom(gameId);
-            }
-            else {
-                this.output("Reload page to connect to Master");
-            }
-            return false;
+        var text = input.value;
+        var chDelim = text.indexOf(":");
+        var userDelim = text.indexOf("@");
+        if (chDelim != -1) {
+            var ch = text.substring(0, chDelim);
+            var t = text.substring(chDelim + 1);
+            this.publishMessage(ch, t);
+            this.logger.info("publish: ", ch, t);
         }
-        var btnJoin = <HTMLButtonElement>document.getElementById("joinrandomgamebtn");
-        btnJoin.onclick = (ev) => {
-            if (this.isInLobby()) {
-                this.output("Random Game...");
-                this.joinRandomRoom();
-            }
-            else {
-                this.output("Reload page to connect to Master");
-            }
-            return false;
+        else if (userDelim != -1) {
+            var u = text.substring(0, userDelim);
+            var t = text.substring(userDelim + 1);
+            this.sendPrivateMessage(u, t);
+            this.logger.info("send private: ", u, t);
         }
-        var btnNew = <HTMLButtonElement>document.getElementById("newgamebtn");
-        btnNew.onclick = (ev) => {
-            if (this.isInLobby()) {
-                var name = <HTMLInputElement>document.getElementById("newgamename");
-                this.output("New Game");
-                this.createRoom(name.value.length > 0 ? name.value : undefined);
+        else {
+            var exists = false;
+            for (var chName in this.getPublicChannels()) {
+                this.publishMessage(chName, text);
+                this.logger.info("publish: ", chName, text);
+                exists = true;
+                break;
             }
-            else {
-                this.output("Reload page to connect to Master");
+            if (!exists) {
+                Output.log("[i]", "error: no subscribed channels");
             }
-            return false;
         }
-
-        var form = <HTMLFormElement>document.getElementById("mainfrm");
-        form.onsubmit = () => {
-            if (this.isJoinedToRoom()) {
-                var input = <HTMLInputElement>document.getElementById("input");
-
-                this.sendMessage(input.value);
-                input.value = '';
-                input.focus();
-            }
-            else {
-                if (this.isInLobby()) {
-                    this.output("Press Join or New Game to connect to Game");
-                }
-                else {
-                    this.output("Reload page to connect to Master");
-                }
-            }
-            return false;
-        }
-
-        var btn = <HTMLButtonElement>document.getElementById("leavebtn");
-        btn.onclick = (ev) => {
-            this.leaveRoom();
-            return false;
-        }
-
-        btn = <HTMLButtonElement>document.getElementById("colorbtn");
-        btn.onclick = (ev) => {
-            var ind = Math.floor(Math.random() * this.USERCOLORS.length);
-			var color:String = this.USERCOLORS[ind];				
-
-			this.myActor().setCustomProperty("color", color);
-
-			this.sendMessage( "... changed his / her color!");
-        }
-
-        this.updateRoomButtons();
     }
 
-    output(str: string, color?: string) {
-        var log = document.getElementById("theDialogue");
-        var escaped = str.replace(/&/, "&amp;").replace(/</, "&lt;").
-        replace(/>/, "&gt;").replace(/"/, "&quot;");
-        if (color) {
-            escaped = "<FONT COLOR='" + color + "'>" + escaped + "</FONT>"; 
-        }
-        log.innerHTML = log.innerHTML + escaped + "<br>";
+}
+
+class Output {
+    public static logger = new Exitgames.Common.Logger();
+
+    static log(str: string, ...op: any[]) {
+        var log = document.getElementById("log");
+        var formatted = this.logger.formatArr(str, op);
+        var newLine = document.createElement('div');
+        newLine.textContent = formatted;
+        log.appendChild(newLine);
         log.scrollTop = log.scrollHeight;
-    }
-
-    private updateRoomButtons() {
-        var btn;
-        btn = <HTMLButtonElement>document.getElementById("newgamebtn");
-        btn.disabled = !(this.isInLobby() && !this.isJoinedToRoom() );
-
-        var canJoin = this.isInLobby() && !this.isJoinedToRoom() && this.availableRooms().length > 0;
-        btn = <HTMLButtonElement>document.getElementById("joingamebtn");
-        btn.disabled = !canJoin;
-        btn = <HTMLButtonElement>document.getElementById("joinrandomgamebtn");
-        btn.disabled = !canJoin;
-
-        btn = <HTMLButtonElement>document.getElementById("leavebtn");
-        btn.disabled = !( this.isJoinedToRoom() );
     }
 }
 
-var demo;
+var chatClient;
 window.onload = () => {
-    demo = new DemoLoadBalancing();
-    demo.start();
+    chatClient = new ChatDemo(<HTMLCanvasElement>document.getElementById("canvas"));
+    chatClient.onStateChange(Photon.Chat.ChatClient.ChatState.Uninitialized);
+
+    var userid = <HTMLInputElement>document.getElementById("userid");
+    userid.value = DemoConstants.InitialUserId;
+
+    var s = Photon.Chat.Constants.UserStatus.Offline;
+    var setuserstatus = document.getElementById("setuserstatus");
+    while (true) {
+        var n = Photon.Chat.Constants.UserStatusToName(s);
+        if (n === undefined) break;
+
+        var b = <HTMLButtonElement>document.createElement("button");
+        setuserstatus.appendChild(b);
+        b.textContent = n;        
+        b.addEventListener("click", ((s, n) => { // bind s and n values to closure context
+            return (ev: any) => {
+                if (!chatClient.setUserStatus(s, "hey, i'm " + n)) { // update message
+//                if (!chatClient.setUserStatus(s, null, true) { // skip message
+//                if (!chatClient.setUserStatus(s) { // clear message
+                    Output.log("[i]", "error: status send failed. [Connect] first?");
+                }
+                else
+                    Output.log("[i]", "my status sent: " + n);
+            };
+        })(s, n));
+        s = s + 1;
+    }
 };
