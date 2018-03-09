@@ -11,7 +11,7 @@ var __extends = (this && this.__extends) || (function () {
 })();
 // For Photon Cloud Application access create cloud-app-info.js file in the root directory (next to default.html) and place next lines in it:
 //var AppInfo = {
-//    StartAddress: "start server address:port",
+//    MasterAddress: "master server address:port",
 //    AppId: "your app id",
 //    AppVersion: "your app version",
 //}
@@ -19,202 +19,234 @@ var __extends = (this && this.__extends) || (function () {
 var DemoWss = this["AppInfo"] && this["AppInfo"]["Wss"];
 var DemoAppId = this["AppInfo"] && this["AppInfo"]["AppId"] ? this["AppInfo"]["AppId"] : "<no-app-id>";
 var DemoAppVersion = this["AppInfo"] && this["AppInfo"]["AppVersion"] ? this["AppInfo"]["AppVersion"] : "1.0";
-var UserCount = 10;
-var DemoConstants = {
-    ChannelsToSubscribe: ["a", "b", "c"],
-    ChannelsToUnsubscribe: ["a", "b", "c", "z"],
-    InitialUserId: "user" + Math.floor(UserCount * Math.random()),
-    FriendList: function () {
-        var res = [];
-        for (var i = 0; i < UserCount; i++)
-            res.push("user" + i);
-        return res;
-    }(),
-    LogLevel: Exitgames.Common.Logger.Level.INFO
-};
-var ChatDemo = /** @class */ (function (_super) {
-    __extends(ChatDemo, _super);
-    function ChatDemo(canvas) {
+var DemoMasterServer = this["AppInfo"] && this["AppInfo"]["MasterServer"];
+var DemoFbAppId = this["AppInfo"] && this["AppInfo"]["FbAppId"];
+var ConnectOnStart = false;
+var DemoLoadBalancing = /** @class */ (function (_super) {
+    __extends(DemoLoadBalancing, _super);
+    function DemoLoadBalancing() {
         var _this = _super.call(this, DemoWss ? Photon.ConnectionProtocol.Wss : Photon.ConnectionProtocol.Ws, DemoAppId, DemoAppVersion) || this;
-        _this.canvas = canvas;
-        _this.logger = new Exitgames.Common.Logger("Demo:", DemoConstants.LogLevel);
+        _this.logger = new Exitgames.Common.Logger("Demo:");
+        _this.USERCOLORS = ["#FF0000", "#00AA00", "#0000FF", "#FFFF00", "#00FFFF", "#FF00FF"];
         // uncomment to use Custom Authentication
         // this.setCustomAuthentication("username=" + "yes" + "&token=" + "yes");
-        Output.log("[i]", "Init", _this.getNameServerAddress(), DemoAppId, DemoAppVersion);
+        _this.output(_this.logger.format("Init", _this.getNameServerAddress(), DemoAppId, DemoAppVersion));
         _this.logger.info("Init", _this.getNameServerAddress(), DemoAppId, DemoAppVersion);
-        _this.setLogLevel(DemoConstants.LogLevel);
+        _this.setLogLevel(Exitgames.Common.Logger.Level.INFO);
+        _this.myActor().setCustomProperty("color", _this.USERCOLORS[0]);
         return _this;
     }
-    // overrides
-    ChatDemo.prototype.onError = function (errorCode, errorMsg) {
-        if (errorCode == Photon.Chat.ChatClient.ChatPeerErrorCode.FrontEndAuthenticationFailed) {
-            errorMsg = errorMsg + " with appId = " + DemoAppId;
-        }
-        this.logger.error(errorCode, errorMsg);
-        Output.log("[i]", "Error", errorCode, errorMsg);
-    };
-    ChatDemo.prototype.onStateChange = function (state) {
-        this.logger.info("State: ", state);
-        var stateText = document.getElementById("statetxt");
-        stateText.textContent = Photon.Chat.ChatClient.StateToName(state);
-        var ChatClientState = Photon.Chat.ChatClient.ChatState;
-        if (state == ChatClientState.ConnectedToFrontEnd) {
-            Output.log("[i]", "---- connected to Front End\n", "[Subscribe] for public channels or type in 'userid@message' and press 'Send' for private");
-        }
-        var disconnected = state == ChatClientState.Uninitialized || state == ChatClientState.Disconnected;
-        if (disconnected) {
-            Output.log("[i]", "type in user id and press [Connect]");
-        }
-    };
-    ChatDemo.prototype.onChatMessages = function (channelName, messages) {
-        for (var i in messages) {
-            var m = messages[i];
-            var sender = m.getSender();
-            if (sender == this.getUserId()) {
-                sender = "me";
+    DemoLoadBalancing.prototype.start = function () {
+        this.setupUI();
+        // connect if no fb auth required 
+        if (ConnectOnStart) {
+            if (DemoMasterServer) {
+                this.setMasterServerAddress(DemoMasterServer);
+                this.connect();
             }
-            Output.log('[' + channelName + ':' + sender + ']', m.getContent());
-        }
-    };
-    ChatDemo.prototype.onPrivateMessage = function (channelName, m) {
-        var sender = m.getSender();
-        if (sender == this.getUserId()) {
-            sender = "me";
-        }
-        Output.log('[' + channelName + '@' + sender + ']', m.getContent());
-    };
-    ChatDemo.prototype.onUserStatusUpdate = function (userId, status, gotMessage, statusMessage) {
-        var msg = statusMessage;
-        if (!gotMessage) {
-            msg = "[message skipped]";
-        }
-        Output.log("[i]", userId + ": " + Photon.Chat.Constants.UserStatusToName(status) + "(" + status + ") / " + msg);
-    };
-    ChatDemo.prototype.onSubscribeResult = function (results) {
-        this.logger.info("onSubscribeResult", results);
-        var m = "---- subscribed to ";
-        for (var ch in results) {
-            this.logger.info("    ", ch, results[ch]);
-            if (results[ch]) {
-                m = m + "'" + ch + "', ";
-            }
-        }
-        Output.log("[i]", m, "\ntype in 'channel:message' and press 'Send' to publish");
-    };
-    ChatDemo.prototype.onUnsubscribeResult = function (results) {
-        this.logger.info("onUnsubscribeResult", results);
-        var m = "unsubscribed from ";
-        for (var ch in results) {
-            this.logger.info("    ", ch, results[ch]);
-            m = m + "'" + ch + "', ";
-        }
-        Output.log("[i]", m);
-    };
-    ChatDemo.prototype.onOperationResponse = function (errorCode, errorMsg, code, content) {
-        if (errorCode != 0) {
-            Output.log('[i]', "error: " + errorMsg + '(op ' + code + ')');
-        }
-    };
-    ChatDemo.prototype.demoConnect = function () {
-        var userid = document.getElementById("userid").value;
-        this.setUserId(userid);
-        this.connectToRegionFrontEnd('EU');
-    };
-    ChatDemo.prototype.demoSubscribe = function () {
-        if (chatClient.subscribe(DemoConstants.ChannelsToSubscribe)) {
-            Output.log("[i]", "subscribing...");
-            if (this.addFriends(DemoConstants.FriendList)) {
-                Output.log("[i]", "adding friends:" + DemoConstants.FriendList.join(","));
-            }
-        }
-        else {
-            Output.log("[i]", "error: subscribe send failed. [Connect] first?");
-        }
-    };
-    ChatDemo.prototype.demoUnsubscribe = function () {
-        if (chatClient.unsubscribe(DemoConstants.ChannelsToUnsubscribe)) {
-            Output.log("[i]", "unsubscribing...");
-            if (this.removeFriends(DemoConstants.FriendList)) {
-                Output.log("[i]", "clearing friends:" + DemoConstants.FriendList.join(","));
+            else {
+                this.connectToRegionMaster("EU");
             }
         }
     };
-    ChatDemo.prototype.demoSendMessage = function () {
-        var input = document.getElementById("input");
-        var text = input.value;
-        var chDelim = text.indexOf(":");
-        var userDelim = text.indexOf("@");
-        if (chDelim != -1) {
-            var ch = text.substring(0, chDelim);
-            var t = text.substring(chDelim + 1);
-            this.publishMessage(ch, t);
-            this.logger.info("publish: ", ch, t);
-        }
-        else if (userDelim != -1) {
-            var u = text.substring(0, userDelim);
-            var t = text.substring(userDelim + 1);
-            this.sendPrivateMessage(u, t);
-            this.logger.info("send private: ", u, t);
-        }
-        else {
-            var exists = false;
-            for (var chName in this.getPublicChannels()) {
-                this.publishMessage(chName, text);
-                this.logger.info("publish: ", chName, text);
-                exists = true;
+    DemoLoadBalancing.prototype.onError = function (errorCode, errorMsg) {
+        this.output("Error " + errorCode + ": " + errorMsg);
+    };
+    DemoLoadBalancing.prototype.onEvent = function (code, content, actorNr) {
+        switch (code) {
+            case 1:
+                var mess = content.message;
+                var sender = content.senderName;
+                if (actorNr)
+                    this.output(sender + ": " + mess, this.myRoomActors()[actorNr].getCustomProperty("color"));
+                else
+                    this.output(sender + ": " + mess);
                 break;
+            default:
+        }
+        this.logger.debug("onEvent", code, "content:", content, "actor:", actorNr);
+    };
+    DemoLoadBalancing.prototype.onStateChange = function (state) {
+        // "namespace" import for static members shorter acceess
+        var LBC = Photon.LoadBalancing.LoadBalancingClient;
+        var stateText = document.getElementById("statetxt");
+        stateText.textContent = LBC.StateToName(state);
+        this.updateRoomButtons();
+        this.updateRoomInfo();
+    };
+    DemoLoadBalancing.prototype.objToStr = function (x) {
+        var res = "";
+        for (var i in x) {
+            res += (res == "" ? "" : " ,") + i + "=" + x[i];
+        }
+        return res;
+    };
+    DemoLoadBalancing.prototype.updateRoomInfo = function () {
+        var stateText = document.getElementById("roominfo");
+        stateText.innerHTML = "room: " + this.myRoom().name + " [" + this.objToStr(this.myRoom()._customProperties) + "]";
+        stateText.innerHTML = stateText.innerHTML + "<br>";
+        stateText.innerHTML += " actors: ";
+        stateText.innerHTML = stateText.innerHTML + "<br>";
+        for (var nr in this.myRoomActors()) {
+            var a = this.myRoomActors()[nr];
+            stateText.innerHTML += " " + nr + " " + a.name + " [" + this.objToStr(a.customProperties) + "]";
+            stateText.innerHTML = stateText.innerHTML + "<br>";
+        }
+        this.updateRoomButtons();
+    };
+    DemoLoadBalancing.prototype.onActorPropertiesChange = function (actor) {
+        this.updateRoomInfo();
+    };
+    DemoLoadBalancing.prototype.onMyRoomPropertiesChange = function () {
+        this.updateRoomInfo();
+    };
+    DemoLoadBalancing.prototype.onRoomListUpdate = function (rooms, roomsUpdated, roomsAdded, roomsRemoved) {
+        this.logger.info("Demo: onRoomListUpdate", rooms, roomsUpdated, roomsAdded, roomsRemoved);
+        this.output("Demo: Rooms update: " + roomsUpdated.length + " updated, " + roomsAdded.length + " added, " + roomsRemoved.length + " removed");
+        this.onRoomList(rooms);
+        this.updateRoomButtons(); // join btn state can be changed
+    };
+    DemoLoadBalancing.prototype.onRoomList = function (rooms) {
+        var menu = document.getElementById("gamelist");
+        while (menu.firstChild) {
+            menu.removeChild(menu.firstChild);
+        }
+        var selectedIndex = 0;
+        for (var i = 0; i < rooms.length; ++i) {
+            var r = rooms[i];
+            var item = document.createElement("option");
+            item.attributes["value"] = r.name;
+            item.textContent = r.name;
+            menu.appendChild(item);
+            if (this.myRoom().name == r.name) {
+                selectedIndex = i;
             }
-            if (!exists) {
-                Output.log("[i]", "error: no subscribed channels");
-            }
+        }
+        menu.selectedIndex = selectedIndex;
+        this.output("Demo: Rooms total: " + rooms.length);
+        this.updateRoomButtons();
+    };
+    DemoLoadBalancing.prototype.onJoinRoom = function () {
+        this.output("Game " + this.myRoom().name + " joined");
+        this.updateRoomInfo();
+    };
+    DemoLoadBalancing.prototype.onActorJoin = function (actor) {
+        this.output("actor " + actor.actorNr + " joined");
+        this.updateRoomInfo();
+    };
+    DemoLoadBalancing.prototype.onActorLeave = function (actor) {
+        this.output("actor " + actor.actorNr + " left");
+        this.updateRoomInfo();
+    };
+    DemoLoadBalancing.prototype.sendMessage = function (message) {
+        try {
+            this.raiseEvent(1, { message: message, senderName: "user" + this.myActor().actorNr });
+            this.output('me[' + this.myActor().actorNr + ']: ' + message, this.myActor().getCustomProperty("color"));
+        }
+        catch (err) {
+            this.output("error: " + err.message);
         }
     };
-    return ChatDemo;
-}(Photon.Chat.ChatClient));
-var Output = /** @class */ (function () {
-    function Output() {
-    }
-    Output.log = function (str) {
-        var op = [];
-        for (var _i = 1; _i < arguments.length; _i++) {
-            op[_i - 1] = arguments[_i];
+    DemoLoadBalancing.prototype.setupUI = function () {
+        var _this = this;
+        this.logger.info("Setting up UI.");
+        var input = document.getElementById("input");
+        input.value = 'hello';
+        input.focus();
+        var btnJoin = document.getElementById("joingamebtn");
+        btnJoin.onclick = function (ev) {
+            if (_this.isInLobby()) {
+                var menu = document.getElementById("gamelist");
+                var gameId = menu.children[menu.selectedIndex].textContent;
+                _this.output(gameId);
+                _this.joinRoom(gameId);
+            }
+            else {
+                _this.output("Reload page to connect to Master");
+            }
+            return false;
+        };
+        var btnJoin = document.getElementById("joinrandomgamebtn");
+        btnJoin.onclick = function (ev) {
+            if (_this.isInLobby()) {
+                _this.output("Random Game...");
+                _this.joinRandomRoom();
+            }
+            else {
+                _this.output("Reload page to connect to Master");
+            }
+            return false;
+        };
+        var btnNew = document.getElementById("newgamebtn");
+        btnNew.onclick = function (ev) {
+            if (_this.isInLobby()) {
+                var name = document.getElementById("newgamename");
+                _this.output("New Game");
+                _this.createRoom(name.value.length > 0 ? name.value : undefined);
+            }
+            else {
+                _this.output("Reload page to connect to Master");
+            }
+            return false;
+        };
+        var form = document.getElementById("mainfrm");
+        form.onsubmit = function () {
+            if (_this.isJoinedToRoom()) {
+                var input = document.getElementById("input");
+                _this.sendMessage(input.value);
+                input.value = '';
+                input.focus();
+            }
+            else {
+                if (_this.isInLobby()) {
+                    _this.output("Press Join or New Game to connect to Game");
+                }
+                else {
+                    _this.output("Reload page to connect to Master");
+                }
+            }
+            return false;
+        };
+        var btn = document.getElementById("leavebtn");
+        btn.onclick = function (ev) {
+            _this.leaveRoom();
+            return false;
+        };
+        btn = document.getElementById("colorbtn");
+        btn.onclick = function (ev) {
+            var ind = Math.floor(Math.random() * _this.USERCOLORS.length);
+            var color = _this.USERCOLORS[ind];
+            _this.myActor().setCustomProperty("color", color);
+            _this.sendMessage("... changed his / her color!");
+        };
+        this.updateRoomButtons();
+    };
+    DemoLoadBalancing.prototype.output = function (str, color) {
+        var log = document.getElementById("theDialogue");
+        var escaped = str.replace(/&/, "&amp;").replace(/</, "&lt;").
+            replace(/>/, "&gt;").replace(/"/, "&quot;");
+        if (color) {
+            escaped = "<FONT COLOR='" + color + "'>" + escaped + "</FONT>";
         }
-        var log = document.getElementById("log");
-        var formatted = this.logger.formatArr(str, op);
-        var newLine = document.createElement('div');
-        newLine.textContent = formatted;
-        log.appendChild(newLine);
+        log.innerHTML = log.innerHTML + escaped + "<br>";
         log.scrollTop = log.scrollHeight;
     };
-    Output.logger = new Exitgames.Common.Logger();
-    return Output;
-}());
-var chatClient;
+    DemoLoadBalancing.prototype.updateRoomButtons = function () {
+        var btn;
+        btn = document.getElementById("newgamebtn");
+        btn.disabled = !(this.isInLobby() && !this.isJoinedToRoom());
+        var canJoin = this.isInLobby() && !this.isJoinedToRoom() && this.availableRooms().length > 0;
+        btn = document.getElementById("joingamebtn");
+        btn.disabled = !canJoin;
+        btn = document.getElementById("joinrandomgamebtn");
+        btn.disabled = !canJoin;
+        btn = document.getElementById("leavebtn");
+        btn.disabled = !(this.isJoinedToRoom());
+    };
+    return DemoLoadBalancing;
+}(Photon.LoadBalancing.LoadBalancingClient));
+var demo;
 window.onload = function () {
-    chatClient = new ChatDemo(document.getElementById("canvas"));
-    chatClient.onStateChange(Photon.Chat.ChatClient.ChatState.Uninitialized);
-    var userid = document.getElementById("userid");
-    userid.value = DemoConstants.InitialUserId;
-    var s = Photon.Chat.Constants.UserStatus.Offline;
-    var setuserstatus = document.getElementById("setuserstatus");
-    while (true) {
-        var n = Photon.Chat.Constants.UserStatusToName(s);
-        if (n === undefined)
-            break;
-        var b = document.createElement("button");
-        setuserstatus.appendChild(b);
-        b.textContent = n;
-        b.addEventListener("click", (function (s, n) {
-            return function (ev) {
-                if (!chatClient.setUserStatus(s, "hey, i'm " + n)) {
-                    //                if (!chatClient.setUserStatus(s, null, true) { // skip message
-                    //                if (!chatClient.setUserStatus(s) { // clear message
-                    Output.log("[i]", "error: status send failed. [Connect] first?");
-                }
-                else
-                    Output.log("[i]", "my status sent: " + n);
-            };
-        })(s, n));
-        s = s + 1;
-    }
+    demo = new DemoLoadBalancing();
+    demo.start();
 };

@@ -55,14 +55,14 @@ form.photon {
     margin-right: 2em;
 }
 
-#log {
+#theDialogue {
     background-color: #000;
     border: 2px solid #fff;
     -moz-border-radius: 4px; /* Mozilla / Firefox */
     -webkit-border-radius: 4px; /* Safari / Chrome */
     border-radius: 4px; /* CSS3 */
     color: #eee;
-    height: 33em;
+    height: 13em;
     margin-bottom: 1em;
     overflow: scroll;
     padding: .5em;
